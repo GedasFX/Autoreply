@@ -31,10 +31,9 @@
       "type": "process",
       "args": [
         "watch",
-        "run",
+        "-p",
         "${workspaceFolder}/Autoreply/Autoreply.csproj",
-        "/property:GenerateFullPaths=true",
-        "/consoleloggerparameters:NoSummary"
+        "run"
       ],
       "problemMatcher": "$msCompile"
     }

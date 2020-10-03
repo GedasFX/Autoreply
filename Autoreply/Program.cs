@@ -1,12 +1,29 @@
 ﻿using System;
+using System.Globalization;
+using Autoreply.Imap;
+using Autoreply.TextAnalysis;
+using Microsoft.Extensions.Configuration;
 
 namespace Autoreply
 {
     class Program
     {
-        static void Main(string[] args)
+        static void Main()
         {
-            Console.WriteLine("Hello World!");
+            var config = new ConfigurationBuilder().AddJsonFile("appsettings.json", optional: false, reloadOnChange: false).Build();
+            var emailCfg = config.GetSection("EmailOptions");
+
+            Console.WriteLine("Configuration Loaded.");
+
+            new ImapResponder(new TextAnalysisClient(config["CognitiveServices:APIKey"], new Uri(config["CognitiveServices:Endpoint"]))).RunImapClientAsync(new ImapOptions
+            {
+                Email = emailCfg["Email"],
+                Name = emailCfg["Name"],
+                Password = emailCfg["Password"],
+                Host = emailCfg["Host"],
+                ImapPort = int.Parse(emailCfg["ImapPort"], CultureInfo.InvariantCulture),
+                SmtpPort = int.Parse(emailCfg["SmtpPort"], CultureInfo.InvariantCulture)
+            }).Wait();
         }
     }
 }
