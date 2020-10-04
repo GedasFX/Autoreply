@@ -41,16 +41,16 @@ Edit `appsettings.json`:
 ```js
 {
   "CognitiveServices": {
-    "APIKey": "",				// From Azure Cognitive services resource
-    "Endpoint": ""				// From Azure Cognitive services resource
+    "APIKey": "",               // From Azure Cognitive services resource
+    "Endpoint": ""              // From Azure Cognitive services resource
   },
   "EmailOptions": {
-    "Email": "",				// Email address to use for the IMTP/SMTP clients
-    "Name": "",					// Name to send emails as (usually your full name)
-    "Password": "",				// Password to use for the IMTP/CMTP clients
-    "Host": "imap.gmail.com",	// Host. Change if not using gmail.
-    "ImapPort": "993",			// IMAP port. Default should work in most cases.
-    "SmtpPort": "465"			// SMTP port. Default should work in most cases.
+    "Email": "",                // Email address to use for the IMTP/SMTP clients
+    "Name": "",                 // Name to send emails as (usually your full name)
+    "Password": "",             // Password to use for the IMTP/CMTP clients
+    "Host": "imap.gmail.com",   // Host. Change if not using gmail.
+    "ImapPort": "993",          // IMAP port. Default should work in most cases.
+    "SmtpPort": "465"           // SMTP port. Default should work in most cases.
   }
 }
 ```

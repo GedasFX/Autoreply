@@ -115,14 +115,23 @@ namespace Autoreply.Imap
 
                     var delay = new Random().Next(300000, 3600000);
                     Console.WriteLine($"[{DateTime.Now:g}] Response generated for email '{message.Subject}'. Response is scheduled to be sent at {DateTime.Now.AddMilliseconds(delay):G}.");
-                    
+
                     // Send the reply.
                     _ = Task.Run(async () =>
                     {
                         await Task.Delay(delay).ConfigureAwait(false);
 
                         Console.WriteLine($"[{DateTime.Now:g}] Sending reply for '{message.Subject}' to '{reply.To[0].Name}'.");
-                        await smtp.SendAsync(reply).ConfigureAwait(false);
+                        try
+                        {
+                            await smtp.SendAsync(reply).ConfigureAwait(false);
+                        }
+                        catch (Exception e)
+                        {
+                            Console.WriteLine(e.ToString());
+                            Console.WriteLine(e.StackTrace);
+                            throw e;
+                        }
                     });
                 }
             }
@@ -192,28 +201,9 @@ namespace Autoreply.Imap
             }
 
             reply.Sender = new MailboxAddress(senderName, senderEmail);
-
-            var replyMsgWithQuotes = new StringBuilder();
-
-            replyMsgWithQuotes.AppendLine(replyText);
-            //replyMsgWithQuotes.AppendLine();
-
-            //var sender = message.Sender ?? message.From.Mailboxes.FirstOrDefault();
-
-            //replyMsgWithQuotes.AppendLine($"On {message.Date:f}, {(!string.IsNullOrEmpty(sender.Name) ? sender.Name : sender.Address)} wrote:");
-            //using (var reader = new StringReader(message.TextBody))
-            //{
-            //    string line;
-            //    while ((line = reader.ReadLine()) != null)
-            //    {
-            //        replyMsgWithQuotes.AppendLine($"> {line}");
-            //    }
-            //}
-
-
             reply.Body = new TextPart("plain")
             {
-                Text = replyMsgWithQuotes.ToString()
+                Text = replyText
             };
 
             return reply;
