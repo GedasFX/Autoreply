@@ -1,4 +1,4 @@
-# IMAP, AI based Email autoreply bot
+# Azure Cognitive Services based Email autoreply bot
 
 Homework assignment for ScamLab exercise 5 - automatic reply to scam (ITC8210 Human Aspects of Cyber Security, [TalTech](https://www.taltech.ee/)).
 
