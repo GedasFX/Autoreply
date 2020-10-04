@@ -19,9 +19,22 @@ namespace Autoreply.Imap
     {
         private readonly TextAnalysisClient _textAnalysisClient;
 
-        private readonly string[] _greetings = new[] { "Hello,", "Hi,", "Greetings,", "Good day," };
-        private readonly string[] _questions = new[] { "I was wondering if you could elaborate on {0}?", "I am not quite sure what you mean by {0}. Could you try to elaborate on that?", "Why should I help you considering {0} is involved." };
-        private readonly string[] _signatures = new[] { "Regards,", "Best wishes,", "Respectfully," };
+        private readonly string[] _greetings = new[] {
+            "Hello,",
+            "Hi,",
+            "Greetings,",
+            "Good day,"
+        };
+        private readonly string[] _questions = new[] {
+            "I was wondering if you could elaborate on {0}?",
+            "I am not quite sure what you mean by {0}. Could you try to elaborate on that?",
+            "Why should I help you considering {0} is involved?",
+        };
+        private readonly string[] _signatures = new[] {
+            "Regards,",
+            "Best wishes,",
+            "Respectfully,"
+        };
 
         private CancellationTokenSource _idle;
 
@@ -32,77 +45,85 @@ namespace Autoreply.Imap
 
         public async Task RunImapClientAsync([NotNull] ImapOptions options)
         {
-            using var client = new ImapClient();
+            using var imap = new ImapClient();
+            using var smtp = new SmtpClient();
             using var cancel = new CancellationTokenSource();
 
-            await client.ConnectAsync(options.Host, options.ImapPort, true, cancel.Token).ConfigureAwait(false);
-            await client.AuthenticateAsync(options.Email, options.Password, cancel.Token).ConfigureAwait(false);
+            await imap.ConnectAsync(options.Host, options.ImapPort, true, cancel.Token).ConfigureAwait(false);
+            await imap.AuthenticateAsync(options.Email, options.Password, cancel.Token).ConfigureAwait(false);
 
-            await client.Inbox.OpenAsync(FolderAccess.ReadOnly).ConfigureAwait(false);
+            await smtp.ConnectAsync(options.Host, options.SmtpPort, true, cancel.Token).ConfigureAwait(false);
+            await smtp.AuthenticateAsync(options.Email, options.Password).ConfigureAwait(false);
 
-            var initialCount = client.Inbox.Count;
+            await imap.Inbox.OpenAsync(FolderAccess.ReadOnly).ConfigureAwait(false);
+
+            var initialCount = imap.Inbox.Count;
 
             var emailArrived = false;
-            client.Inbox.CountChanged += (sender, e) =>
+            imap.Inbox.CountChanged += (sender, e) =>
             {
+                Console.WriteLine($"[{DateTime.Now:g}] New email detected.");
                 emailArrived = true;
             };
 
-            Console.WriteLine("Client ready. Waiting for emails");
+            Console.WriteLine($"[{DateTime.Now:g}] Client ready. Waiting for emails.");
 
             while (true)
             {
                 _idle = new CancellationTokenSource();
-                var idl = client.IdleAsync(_idle.Token);
+                var idl = imap.IdleAsync(_idle.Token);
 
                 var random = new Random();
                 while (!emailArrived)
                 {
-
-                    // Replies should not be instantanious. This check will be performed between 5 minutes and 2 hours.
-                    var delay = random.Next(300000, 7200000);
-
-                    Console.WriteLine("No new emails detected. Sleeping.");
-                    await Task.Delay(delay).ConfigureAwait(false);
+                    Console.WriteLine($"[{DateTime.Now:g}] No new emails detected. Sleeping for 5 minutes.");
+                    await Task.Delay(300000).ConfigureAwait(false);
                 }
 
                 // Email arrived, handle it.
-                Console.WriteLine("Email detected. Generating response");
 
                 _idle.Cancel();
                 idl.Wait();
 
-                if (client.Inbox.Count > initialCount)
+                if (imap.Inbox.Count > initialCount)
                 {
-                    await HandleEmailsAsync(client, initialCount, options).ConfigureAwait(false);
+                    Console.WriteLine($"[{DateTime.Now:g}] Generating responses for the received emails.");
+                    await HandleEmailsAsync(imap, smtp, initialCount, options).ConfigureAwait(false);
                 }
 
-                initialCount = client.Inbox.Count;
+                initialCount = imap.Inbox.Count;
                 emailArrived = false;
             }
         }
 
-        private async Task HandleEmailsAsync(ImapClient client, int prevEnd, ImapOptions options)
+        private async Task HandleEmailsAsync(ImapClient imap, SmtpClient smtp, int prevEnd, ImapOptions options)
         {
             using var cancel = new CancellationTokenSource();
 
-            foreach (var summary in await client.Inbox.FetchAsync(prevEnd, -1, MessageSummaryItems.Full | MessageSummaryItems.UniqueId).ConfigureAwait(false))
+            var newEmailSummaries = await imap.Inbox.FetchAsync(prevEnd, -1, MessageSummaryItems.Full | MessageSummaryItems.UniqueId).ConfigureAwait(false);
+            Console.WriteLine($"[{DateTime.Now:g}] Detected {newEmailSummaries.Count} new e-mails. Generating responses.");
+
+            foreach (var summary in newEmailSummaries)
             {
-                var message = await client.Inbox.GetMessageAsync(summary.Index, cancel.Token).ConfigureAwait(false);
+                var message = await imap.Inbox.GetMessageAsync(summary.Index, cancel.Token).ConfigureAwait(false);
                 var text = PrepareText(message.TextBody) ?? PrepareText(PrepareHtml(message.HtmlBody)) ?? "";
 
-                var preparedText = text;
-                if (!string.IsNullOrWhiteSpace(preparedText))
+                if (!string.IsNullOrWhiteSpace(text))
                 {
                     var keyPhrases = await _textAnalysisClient.ExtractKeyPhrasesAsync(text, cancel.Token).ConfigureAwait(false);
                     var reply = PrepareReply(message, options.Email, options.Name, GenerateReplyMessage(keyPhrases));
 
+                    var delay = new Random().Next(300000, 3600000);
+                    Console.WriteLine($"[{DateTime.Now:g}] Response generated for email '{message.Subject}'. Response is scheduled to be sent at {DateTime.Now.AddMilliseconds(delay):G}.");
+                    
                     // Send the reply.
-                    using var smtp = new SmtpClient();
-                    await smtp.ConnectAsync(options.Host, options.SmtpPort, true, cancel.Token).ConfigureAwait(false);
-                    await smtp.AuthenticateAsync(options.Email, options.Password).ConfigureAwait(false);
-                    await smtp.SendAsync(reply).ConfigureAwait(false);
-                    await smtp.DisconnectAsync(true).ConfigureAwait(false);
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(delay).ConfigureAwait(false);
+
+                        Console.WriteLine($"[{DateTime.Now:g}] Sending reply for '{message.Subject}' to '{reply.To[0].Name}'.");
+                        await smtp.SendAsync(reply).ConfigureAwait(false);
+                    });
                 }
             }
         }
@@ -205,7 +226,7 @@ namespace Autoreply.Imap
             var message = new StringBuilder();
             message.AppendLine(_greetings[random.Next(_greetings.Length)]);
             message.AppendLine();
-            message.AppendLine(string.Format(CultureInfo.InvariantCulture, _questions[random.Next(_questions.Length)], keywords[random.Next(keywords.Count)]));
+            message.AppendLine(string.Format(CultureInfo.InvariantCulture, _questions[random.Next(_questions.Length)], keywords[0]));
             message.AppendLine();
             message.AppendLine(_signatures[random.Next(_signatures.Length)]);
             message.AppendLine("Dainius");

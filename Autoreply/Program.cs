@@ -13,7 +13,7 @@ namespace Autoreply
             var config = new ConfigurationBuilder().AddJsonFile("appsettings.json", optional: false, reloadOnChange: false).Build();
             var emailCfg = config.GetSection("EmailOptions");
 
-            Console.WriteLine("Configuration Loaded.");
+            Console.WriteLine($"[{DateTime.Now:g}] Configuration Loaded successfully.");
 
             new ImapResponder(new TextAnalysisClient(config["CognitiveServices:APIKey"], new Uri(config["CognitiveServices:Endpoint"]))).RunImapClientAsync(new ImapOptions
             {
