@@ -15,7 +15,7 @@ namespace Autoreply
 
             Console.WriteLine($"[{DateTime.Now:g}] Configuration Loaded successfully.");
 
-            new ImapResponder(new TextAnalysisClient(config["CognitiveServices:APIKey"], new Uri(config["CognitiveServices:Endpoint"]))).RunImapClientAsync(new ImapOptions
+            new ImapResponder(new TextAnalysisClient(config["CognitiveServices:APIKey"], new Uri(config["CognitiveServices:Endpoint"])), new ImapOptions
             {
                 Email = emailCfg["Email"],
                 Name = emailCfg["Name"],
@@ -23,7 +23,7 @@ namespace Autoreply
                 Host = emailCfg["Host"],
                 ImapPort = int.Parse(emailCfg["ImapPort"], CultureInfo.InvariantCulture),
                 SmtpPort = int.Parse(emailCfg["SmtpPort"], CultureInfo.InvariantCulture)
-            }).Wait();
+            }).RunImapClientAsync().Wait();
         }
     }
 }

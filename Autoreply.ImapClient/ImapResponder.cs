@@ -6,7 +6,6 @@ using MailKit.Net.Smtp;
 using MimeKit;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -18,6 +17,7 @@ namespace Autoreply.Imap
     public class ImapResponder
     {
         private readonly TextAnalysisClient _textAnalysisClient;
+        private readonly ImapOptions _options;
 
         private readonly string[] _greetings = new[] {
             "Hello,",
@@ -38,31 +38,25 @@ namespace Autoreply.Imap
 
         private CancellationTokenSource _idle;
 
-        public ImapResponder(TextAnalysisClient textAnalysis)
+        public ImapResponder(TextAnalysisClient textAnalysis, ImapOptions options)
         {
             _textAnalysisClient = textAnalysis;
+            _options = options;
         }
 
-        public async Task RunImapClientAsync([NotNull] ImapOptions options)
+        public async Task RunImapClientAsync()
         {
             using var imap = new ImapClient();
-            using var smtp = new SmtpClient();
-            using var cancel = new CancellationTokenSource();
 
-            await imap.ConnectAsync(options.Host, options.ImapPort, true, cancel.Token).ConfigureAwait(false);
-            await imap.AuthenticateAsync(options.Email, options.Password, cancel.Token).ConfigureAwait(false);
-
-            await smtp.ConnectAsync(options.Host, options.SmtpPort, true, cancel.Token).ConfigureAwait(false);
-            await smtp.AuthenticateAsync(options.Email, options.Password).ConfigureAwait(false);
+            await LoginAsync(imap).ConfigureAwait(false);
 
             await imap.Inbox.OpenAsync(FolderAccess.ReadOnly).ConfigureAwait(false);
-
             var initialCount = imap.Inbox.Count;
 
             var emailArrived = false;
             imap.Inbox.CountChanged += (sender, e) =>
             {
-                Console.WriteLine($"[{DateTime.Now:g}] New email detected.");
+                Console.WriteLine($"[{DateTime.Now:g}] A new email detected.");
                 emailArrived = true;
             };
 
@@ -76,7 +70,31 @@ namespace Autoreply.Imap
                 var random = new Random();
                 while (!emailArrived)
                 {
-                    Console.WriteLine($"[{DateTime.Now:g}] No new emails detected. Sleeping for 5 minutes.");
+                    // Periodic checks are needed to keep the IMAP session alive. This does nothing of value.
+                    try
+                    {
+                        _idle.Cancel();
+                        idl.Wait();
+
+                        await imap.Inbox.FetchAsync(initialCount, -1, MessageSummaryItems.UniqueId).ConfigureAwait(false);
+
+                        _idle = new CancellationTokenSource();
+                        idl = imap.IdleAsync(_idle.Token);
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine(e.ToString());
+                        Console.WriteLine(e.StackTrace);
+
+                        throw;
+                    }
+
+                    if (!imap.IsConnected)
+                    {
+                        await LoginAsync(imap).ConfigureAwait(false);
+                    }
+
+                    // Console.WriteLine($"[{DateTime.Now:g}] No new emails detected. Sleeping for 5 minutes.");
                     await Task.Delay(300000).ConfigureAwait(false);
                 }
 
@@ -88,7 +106,7 @@ namespace Autoreply.Imap
                 if (imap.Inbox.Count > initialCount)
                 {
                     Console.WriteLine($"[{DateTime.Now:g}] Generating responses for the received emails.");
-                    await HandleEmailsAsync(imap, smtp, initialCount, options).ConfigureAwait(false);
+                    await HandleEmailsAsync(imap, initialCount).ConfigureAwait(false);
                 }
 
                 initialCount = imap.Inbox.Count;
@@ -96,7 +114,15 @@ namespace Autoreply.Imap
             }
         }
 
-        private async Task HandleEmailsAsync(ImapClient imap, SmtpClient smtp, int prevEnd, ImapOptions options)
+        private async Task LoginAsync(IMailService client, CancellationToken cancellationToken = default)
+        {
+            var isImap = client is IImapClient;
+
+            await client.ConnectAsync(_options.Host, isImap ? _options.ImapPort : _options.SmtpPort, true, cancellationToken).ConfigureAwait(false);
+            await client.AuthenticateAsync(_options.Email, _options.Password, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task HandleEmailsAsync(ImapClient imap, int prevEnd)
         {
             using var cancel = new CancellationTokenSource();
 
@@ -111,7 +137,7 @@ namespace Autoreply.Imap
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     var keyPhrases = await _textAnalysisClient.ExtractKeyPhrasesAsync(text, cancel.Token).ConfigureAwait(false);
-                    var reply = PrepareReply(message, options.Email, options.Name, GenerateReplyMessage(keyPhrases));
+                    var reply = PrepareReply(message, GenerateReplyMessage(keyPhrases));
 
                     var delay = new Random().Next(300000, 3600000);
                     Console.WriteLine($"[{DateTime.Now:g}] Response generated for email '{message.Subject}'. Response is scheduled to be sent at {DateTime.Now.AddMilliseconds(delay):G}.");
@@ -122,17 +148,47 @@ namespace Autoreply.Imap
                         await Task.Delay(delay).ConfigureAwait(false);
 
                         Console.WriteLine($"[{DateTime.Now:g}] Sending reply for '{message.Subject}' to '{reply.To[0].Name}'.");
-                        try
-                        {
-                            await smtp.SendAsync(reply).ConfigureAwait(false);
-                        }
-                        catch (Exception e)
-                        {
-                            Console.WriteLine(e.ToString());
-                            Console.WriteLine(e.StackTrace);
-                            throw e;
-                        }
+                        await TrySendEmailAsync(reply).ConfigureAwait(false);
                     });
+                }
+            }
+        }
+
+        private async Task TrySendEmailAsync(MimeMessage reply)
+        {
+            using var client = new SmtpClient();
+            try
+            {
+                await LoginAsync(client).ConfigureAwait(false);
+                await client.SendAsync(reply).ConfigureAwait(false);
+                await client.DisconnectAsync(true).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                if (e is SmtpCommandException || e is ServiceNotConnectedException)
+                {
+                    try
+                    {
+                        Console.WriteLine($"[{DateTime.Now:g}] SMTP Client Timed out. Reconnecting.");
+                        await LoginAsync(client).ConfigureAwait(false);
+                        await client.SendAsync(reply).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // Relogging failed to fix the issue. Throw error.
+                        Console.WriteLine(e.ToString());
+                        Console.WriteLine(e.StackTrace);
+
+                        throw;
+                    }
+                }
+                else
+                {
+                    // Unexpected error occured. Throw.
+                    Console.WriteLine(e.ToString());
+                    Console.WriteLine(e.StackTrace);
+
+                    throw;
                 }
             }
         }
@@ -170,7 +226,7 @@ namespace Autoreply.Imap
             return Regex.Replace(dirtyText, "&.{1,10};", " ");
         }
 
-        private static MimeMessage PrepareReply(MimeMessage message, string senderEmail, string senderName, string replyText)
+        private MimeMessage PrepareReply(MimeMessage message, string replyText)
         {
             var reply = new MimeMessage();
 
@@ -200,7 +256,7 @@ namespace Autoreply.Imap
                 reply.References.Add(message.MessageId);
             }
 
-            reply.Sender = new MailboxAddress(senderName, senderEmail);
+            reply.Sender = new MailboxAddress(_options.Name, _options.Email);
             reply.Body = new TextPart("plain")
             {
                 Text = replyText
